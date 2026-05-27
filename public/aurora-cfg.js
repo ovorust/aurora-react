@@ -14,7 +14,6 @@
       }
 
       const data = await response.json();
-      console.log('OpenRouter key response:', data);
 
       if (data && typeof data.oprk === 'string') {
         _key = data.oprk;
