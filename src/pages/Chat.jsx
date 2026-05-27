@@ -44,6 +44,22 @@ export default function Chat() {
 
   const createChatId = () => crypto?.randomUUID?.() || `chat-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
+  function createChatTitleFromMessage(text) {
+    if (!text) return 'Nova conversa';
+    let s = text.toLowerCase().trim();
+    s = s.replace(/^(me\s+)?(por\s+favor\s+)?/i, '');
+    s = s.replace(/^(me\s+)?(explique|explique-me|defina|resuma)\s*/i, '');
+    s = s.replace(/o que (?:é|e|são|sao)\s*/i, '');
+    s = s.replace(/[?!.]+$/g, '').replace(/[?!.]/g, '');
+    const words = s.split(/\s+/).filter(Boolean);
+    const titleCore = words.slice(0, 5).join(' ');
+    const cap = titleCore.replace(/\b\w/g, (c) => c.toUpperCase());
+    if (/\b(explique|defina|resuma)\b/i.test(text) || /o que (?:é|e|são|sao)/i.test(text)) {
+      return 'Explicação de ' + cap;
+    }
+    return cap || 'Nova conversa';
+  }
+
   useEffect(() => {
     loadChats()
       .then((data) => {
@@ -172,7 +188,8 @@ export default function Chat() {
 
       if (!currentChatId) {
         const id = createChatId();
-        const newChat = { id, name: 'Nova conversa', messages: [userMsg, assistantPlaceholder] };
+        const title = createChatTitleFromMessage(text);
+        const newChat = { id, name: title, messages: [userMsg, assistantPlaceholder] };
         const updatedChats = [newChat, ...chats];
         setChats(updatedChats);
         setActiveChatId(id);
