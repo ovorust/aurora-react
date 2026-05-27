@@ -70,9 +70,7 @@ export default function Chat() {
           messages: Array.isArray(chat.messages) ? chat.messages : [],
         }));
         setChats(normalized);
-        if (normalized.length) {
-          setActiveChatId(normalized[0].id);
-        }
+        // leave `activeChatId` null so the page opens in initial (no-chat) state
       })
       .catch(() => {});
   }, []);
@@ -187,16 +185,30 @@ export default function Chat() {
       const assistantPlaceholder = { id: Date.now() + 1, role: 'assistant', content: '', streaming: true };
 
       if (!currentChatId) {
-        const id = createChatId();
-        const title = createChatTitleFromMessage(text);
-        const newChat = { id, name: title, messages: [userMsg, assistantPlaceholder] };
-        const updatedChats = [newChat, ...chats];
-        setChats(updatedChats);
-        setActiveChatId(id);
-        currentChatId = id;
-        historyRef.current = [userMsg];
-        setMessages([userMsg, assistantPlaceholder]);
-        persistChats(updatedChats);
+        if (chats.length === 0) {
+          const id = createChatId();
+          const title = createChatTitleFromMessage(text);
+          const newChat = { id, name: title, messages: [userMsg, assistantPlaceholder] };
+          const updatedChats = [newChat, ...chats];
+          setChats(updatedChats);
+          setActiveChatId(id);
+          currentChatId = id;
+          historyRef.current = [userMsg];
+          setMessages([userMsg, assistantPlaceholder]);
+          persistChats(updatedChats);
+        } else {
+          // If there are existing chats but none selected, open the first one and append
+          const first = chats[0];
+          const id = first.id;
+          setActiveChatId(id);
+          currentChatId = id;
+          const existing = Array.isArray(first.messages) ? first.messages : [];
+          historyRef.current = [...existing, userMsg];
+          const updatedChats = chats.map((c) => (c.id === id ? { ...c, messages: [...existing, userMsg, assistantPlaceholder] } : c));
+          setChats(updatedChats);
+          setMessages([...existing, userMsg, assistantPlaceholder]);
+          persistChats(updatedChats);
+        }
       } else {
         historyRef.current = [...historyRef.current, userMsg];
         setMessages((prev) => [
