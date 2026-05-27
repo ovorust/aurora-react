@@ -8,18 +8,38 @@ import Toast from '../components/Toast';
 import { useToast } from '../hooks/useToast';
 
 marked.setOptions({ breaks: true, gfm: true });
+marked.setOptions({ breaks: true, gfm: true });
 
-      const currentChatId = activeChatId;
-      const userMsg = { id: Date.now(), role: 'user', content: text };
-      const assistantPlaceholder = { id: Date.now() + 1, role: 'assistant', content: '', streaming: true };
+export default function Chat() {
+  const navigate = useNavigate();
+  const { toast, showToast } = useToast();
 
-      // historyRef holds role/content items for streaming and persistence
-      historyRef.current = [...historyRef.current, { role: 'user', content: text }];
-      setMessages((prev) => [
-        ...prev,
-        userMsg,
-        assistantPlaceholder,
-      ]);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [model, setModel] = useState(() => localStorage.getItem('aurora_model') || 'openrouter/free');
+  const [additionalContext, setAdditionalContext] = useState(() => localStorage.getItem('aurora_knowledge') || '');
+  const [knowledgeBase, setKnowledgeBase] = useState(null);
+
+  const [chats, setChats] = useState([]);
+  const [activeChatId, setActiveChatId] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [savingChats, setSavingChats] = useState(false);
+
+  const msgsRef = useRef(null);
+  const inputRef = useRef(null);
+  const historyRef = useRef([]);
+
+  const activeChat = chats.find((chat) => chat.id === activeChatId) ?? null;
+
+  const createChatId = () => (crypto?.randomUUID?.() || `chat-${Date.now()}-${Math.floor(Math.random() * 10000)}`);
+
+  function createChatTitleFromMessage(text) {
+    if (!text) return 'Nova conversa';
+    let s = String(text).toLowerCase().trim();
     s = s.replace(/^(me\s+)?(por\s+favor\s+)?/i, '');
     s = s.replace(/^(me\s+)?(explique|explique-me|defina|resuma)\s*/i, '');
     s = s.replace(/o que (?:é|e|são|sao)\s*/i, '');
