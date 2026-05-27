@@ -1,0 +1,81 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:      #0c0b09;
+  --s1:      #161410;
+  --s2:      #1e1c18;
+  --s3:      #27231c;
+  --bdr:     rgba(230,195,110,0.08);
+  --bdr-h:   rgba(230,195,110,0.18);
+  --acc:     #d4a64a;
+  --acc-dim: rgba(212,166,74,0.13);
+  --text:    #ece5d6;
+  --muted:   #6b6356;
+  --subtle:  #3a362e;
+  --danger:  #d46a6a;
+  --font:    'Sora', sans-serif;
+  --r:       10px;
+  --r-lg:    16px;
+  --r-xl:    22px;
+  --r-pill:  999px;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root { height: 100%; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-thumb { background: var(--s3); border-radius: 2px; }
+* { scrollbar-width: thin; scrollbar-color: var(--s3) transparent; }
+
+/* ── Animations ── */
+@keyframes msgUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* ── Markdown bubble content ── */
+.md-content p  { margin: 0 0 8px; }
+.md-content p:last-child { margin: 0; }
+.md-content code {
+  background: var(--s3); padding: 2px 5px; border-radius: 5px;
+  font-size: 13px; font-family: 'Courier New', monospace; color: #d4b06a;
+}
+.md-content pre {
+  background: var(--s2); border: 1px solid var(--bdr);
+  border-radius: var(--r); padding: 13px;
+  overflow-x: auto; margin: 9px 0; font-size: 13px;
+}
+.md-content pre code { background: none; padding: 0; color: var(--text); }
+.md-content ul, .md-content ol { padding-left: 22px; margin: 8px 0; }
+.md-content li { margin: 3px 0; }
+.md-content h1, .md-content h2, .md-content h3 { margin: 13px 0 5px; font-weight: 600; }
+.md-content strong { color: #e8c478; font-weight: 600; }
+.md-content a { color: var(--acc); }
+.md-content blockquote {
+  border-left: 3px solid var(--acc); padding-left: 13px;
+  margin: 9px 0; color: var(--muted); font-style: italic;
+}
+.md-content table { border-collapse: collapse; width: 100%; margin: 9px 0; font-size: 13px; }
+.md-content th, .md-content td { border: 1px solid var(--bdr-h); padding: 6px 11px; text-align: left; }
+.md-content th { background: var(--s2); font-weight: 500; }
+.md-content hr { border: none; border-top: 1px solid var(--bdr); margin: 11px 0; }
+
+/* ── Responsive ── */
+@media (max-width: 600px) {
+  .aurora-hdr-sub, .aurora-badge { display: none; }
+}
