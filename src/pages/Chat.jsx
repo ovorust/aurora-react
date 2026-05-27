@@ -63,7 +63,9 @@ export default function Chat() {
           messages: Array.isArray(chat.messages) ? chat.messages : [],
         }));
         setChats(normalized);
-        // leave `activeChatId` null so the page opens in initial (no-chat) state
+        if (normalized.length) {
+          setActiveChatId(normalized[0].id);
+        }
       })
       .catch(() => {});
   }, []);
@@ -182,50 +184,24 @@ export default function Chat() {
       let currentChatId = activeChatId;
       if (!currentChatId) {
         const id = createChatId();
-        const newChat = { id, name: 'Nova conversa', messages: [] };
+        const title = createChatTitleFromMessage(text);
+        const newChat = { id, name: title, messages: [] };
         const updatedChats = [newChat, ...chats];
         setChats(updatedChats);
         setActiveChatId(id);
         currentChatId = id;
-        persistChats(updatedChats);
+        await persistChats(updatedChats);
       }
 
       const userMsg = { id: Date.now(), role: 'user', content: text };
       const assistantPlaceholder = { id: Date.now() + 1, role: 'assistant', content: '', streaming: true };
 
-      if (!currentChatId) {
-        if (chats.length === 0) {
-          const id = createChatId();
-          const title = createChatTitleFromMessage(text);
-          const newChat = { id, name: title, messages: [userMsg, assistantPlaceholder] };
-          const updatedChats = [newChat, ...chats];
-          setChats(updatedChats);
-          setActiveChatId(id);
-          currentChatId = id;
-          historyRef.current = [userMsg];
-          setMessages([userMsg, assistantPlaceholder]);
-          persistChats(updatedChats);
-        } else {
-          // If there are existing chats but none selected, open the first one and append
-          const first = chats[0];
-          const id = first.id;
-          setActiveChatId(id);
-          currentChatId = id;
-          const existing = Array.isArray(first.messages) ? first.messages : [];
-          historyRef.current = [...existing, userMsg];
-          const updatedChats = chats.map((c) => (c.id === id ? { ...c, messages: [...existing, userMsg, assistantPlaceholder] } : c));
-          setChats(updatedChats);
-          setMessages([...existing, userMsg, assistantPlaceholder]);
-          persistChats(updatedChats);
-        }
-      } else {
-        historyRef.current = [...historyRef.current, userMsg];
-        setMessages((prev) => [
-          ...prev,
-          userMsg,
-          assistantPlaceholder,
-        ]);
-      }
+      historyRef.current = [...historyRef.current, { role: 'user', content: text }];
+      setMessages((prev) => [
+        ...prev,
+        userMsg,
+        assistantPlaceholder,
+      ]);
 
       const systemContent = buildSystemPrompt(knowledgeBase, additionalContext);
       const msgsCopy = historyRef.current.slice();
@@ -257,8 +233,7 @@ export default function Chat() {
             return next;
           });
           historyRef.current = [...historyRef.current, { role: 'assistant', content: full }];
-          // only persist to an existing chat; transient conversations are not saved until user clicks "Salvar"
-          if (currentChatId) await updateActiveChatMessages(historyRef.current);
+          await updateActiveChatMessages(historyRef.current);
         } catch (err) {
           console.error('[AURORA] tentativa ' + attempts, err);
           if (attempts < MAX && err.status !== 401 && err.status !== 400) {
@@ -386,17 +361,6 @@ export default function Chat() {
           </span>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            onClick={handleSaveCurrentChat}
-            disabled={savingChats || historyRef.current.length === 0}
-            style={{
-              padding: '8px 12px', borderRadius: 10, border: 'none', cursor: 'pointer',
-              background: savingChats ? 'var(--s3)' : 'rgba(212,166,74,.12)', color: 'var(--text)'
-            }}
-          >
-            Salvar conversa
-          </button>
-
           <IconBtn title="Gerenciar Base de Conhecimento" onClick={() => navigate('/knowledge-manager')}>
             <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
           </IconBtn>
