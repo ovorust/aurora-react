@@ -83,7 +83,7 @@ export default function Chat() {
       setMessages([]);
       historyRef.current = [];
     }
-  }, [activeChatId]);
+  }, [activeChatId, chats]);
 
   const persistChats = async (updatedChats) => {
     setChats(updatedChats);
