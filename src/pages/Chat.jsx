@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { marked } from 'marked';
-import { streamChat, loadKnowledgeBase } from '../utils/api';
+import { streamChat, loadKnowledgeBase, loadChats, saveChats } from '../utils/api';
 import { buildSystemPrompt, friendlyError } from '../utils/systemPrompt';
 import SettingsModal from '../components/SettingsModal';
 import Toast from '../components/Toast';
@@ -29,9 +29,108 @@ export default function Chat() {
   const [additionalContext, setAdditionalContext] = useState(() => localStorage.getItem('aurora_knowledge') || '');
   const [knowledgeBase, setKnowledgeBase] = useState(null);
 
+  const [chats, setChats] = useState([]);
+  const [activeChatId, setActiveChatId] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [savingChats, setSavingChats] = useState(false);
+
   const msgsRef = useRef(null);
   const inputRef = useRef(null);
   const historyRef = useRef([]); // track history for streaming retries
+
+  const activeChat = chats.find((chat) => chat.id === activeChatId) ?? null;
+
+  const createChatId = () => crypto?.randomUUID?.() || `chat-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+  useEffect(() => {
+    loadChats()
+      .then((data) => {
+        const loaded = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+        const normalized = loaded.map((chat) => ({
+          id: chat.id || createChatId(),
+          name: chat.name || 'Nova conversa',
+          messages: Array.isArray(chat.messages) ? chat.messages : [],
+        }));
+        setChats(normalized);
+        if (normalized.length) {
+          setActiveChatId(normalized[0].id);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (activeChat) {
+      setMessages(activeChat.messages);
+      historyRef.current = activeChat.messages || [];
+    } else {
+      setMessages([]);
+      historyRef.current = [];
+    }
+  }, [activeChatId]);
+
+  const persistChats = async (updatedChats) => {
+    setChats(updatedChats);
+    setSavingChats(true);
+    try {
+      await saveChats(updatedChats);
+    } catch (err) {
+      console.error('Falha ao salvar chats:', err);
+      showToast('Não foi possível salvar chats');
+    } finally {
+      setSavingChats(false);
+    }
+  };
+
+  const handleNewChat = async () => {
+    const id = createChatId();
+    const chat = { id, name: 'Nova conversa', messages: [] };
+    const updated = [chat, ...chats];
+    setActiveChatId(id);
+    await persistChats(updated);
+    setSidebarOpen(false);
+  };
+
+  const handleSelectChat = (id) => {
+    setActiveChatId(id);
+    setSidebarOpen(false);
+  };
+
+  const handleDeleteChat = async (id) => {
+    const updated = chats.filter((chat) => chat.id !== id);
+    setChats(updated);
+    if (id === activeChatId) {
+      setActiveChatId(updated[0]?.id ?? null);
+    }
+    await persistChats(updated);
+  };
+
+  const handleStartRename = (chat) => {
+    setRenamingId(chat.id);
+    setRenameValue(chat.name);
+  };
+
+  const handleSaveRename = async (id) => {
+    const name = renameValue.trim() || 'Sem título';
+    const updated = chats.map((chat) => (chat.id === id ? { ...chat, name } : chat));
+    setRenamingId(null);
+    await persistChats(updated);
+  };
+
+  const handleRenameKeyDown = (e, id) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleSaveRename(id);
+    }
+  };
+
+  const updateActiveChatMessages = async (newMessages) => {
+    if (!activeChatId) return;
+    const updated = chats.map((chat) => (chat.id === activeChatId ? { ...chat, messages: newMessages } : chat));
+    await persistChats(updated);
+  };
 
   /* ── Load knowledge base ── */
   useEffect(() => {
@@ -57,15 +156,38 @@ export default function Chat() {
       setInput('');
       setBusy(true);
 
-      const userMsg = { role: 'user', content: text };
-      historyRef.current = [...historyRef.current, userMsg];
+      let currentChatId = activeChatId;
+      if (!currentChatId) {
+        const id = createChatId();
+        const newChat = { id, name: 'Nova conversa', messages: [] };
+        const updatedChats = [newChat, ...chats];
+        setChats(updatedChats);
+        setActiveChatId(id);
+        currentChatId = id;
+        persistChats(updatedChats);
+      }
 
-      // Optimistic: add user + placeholder assistant
-      setMessages((prev) => [
-        ...prev,
-        { id: Date.now(), role: 'user', content: text },
-        { id: Date.now() + 1, role: 'assistant', content: '', streaming: true },
-      ]);
+      const userMsg = { id: Date.now(), role: 'user', content: text };
+      const assistantPlaceholder = { id: Date.now() + 1, role: 'assistant', content: '', streaming: true };
+
+      if (!currentChatId) {
+        const id = createChatId();
+        const newChat = { id, name: 'Nova conversa', messages: [userMsg, assistantPlaceholder] };
+        const updatedChats = [newChat, ...chats];
+        setChats(updatedChats);
+        setActiveChatId(id);
+        currentChatId = id;
+        historyRef.current = [userMsg];
+        setMessages([userMsg, assistantPlaceholder]);
+        persistChats(updatedChats);
+      } else {
+        historyRef.current = [...historyRef.current, userMsg];
+        setMessages((prev) => [
+          ...prev,
+          userMsg,
+          assistantPlaceholder,
+        ]);
+      }
 
       const systemContent = buildSystemPrompt(knowledgeBase, additionalContext);
       const msgsCopy = historyRef.current.slice();
@@ -91,19 +213,18 @@ export default function Chat() {
               return next;
             });
           }
-          // Done
           setMessages((prev) => {
             const next = [...prev];
             next[next.length - 1] = { ...next[next.length - 1], content: full, streaming: false };
             return next;
           });
           historyRef.current = [...historyRef.current, { role: 'assistant', content: full }];
+          await updateActiveChatMessages(historyRef.current);
         } catch (err) {
           console.error('[AURORA] tentativa ' + attempts, err);
           if (attempts < MAX && err.status !== 401 && err.status !== 400) {
             return tryOnce();
           }
-          // Error state
           setMessages((prev) => {
             const next = [...prev];
             next[next.length - 1] = {
@@ -114,7 +235,7 @@ export default function Chat() {
             };
             return next;
           });
-          historyRef.current.pop(); // remove the failed user msg from history
+          historyRef.current.pop();
         }
       }
 
@@ -122,7 +243,7 @@ export default function Chat() {
       setBusy(false);
       inputRef.current?.focus();
     },
-    [input, busy, model, knowledgeBase, additionalContext]
+    [input, busy, model, knowledgeBase, additionalContext, activeChatId, chats]
   );
 
   function handleKeyDown(e) {
@@ -135,6 +256,7 @@ export default function Chat() {
   function handleClear() {
     setMessages([]);
     historyRef.current = [];
+    if (activeChatId) updateActiveChatMessages([]);
     inputRef.current?.focus();
   }
 
@@ -146,7 +268,52 @@ export default function Chat() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', maxWidth: 820, margin: '0 auto' }}>
+    <div className="chat-shell">
+      <aside className={`chat-sidebar ${sidebarOpen ? 'open' : ''}`}>
+        <div className="sidebar-header">
+          <div className="sidebar-title">Conversas</div>
+          <button className="sidebar-btn" onClick={handleNewChat}>
+            + Novo chat
+          </button>
+        </div>
+        <div className="chat-list">
+          {chats.length === 0 ? (
+            <div className="chat-empty">Nenhum chat salvo. Crie um novo chat.</div>
+          ) : (
+            chats.map((chat) => (
+              <div key={chat.id} className={`chat-item ${chat.id === activeChatId ? 'active' : ''}`}>
+                {renamingId === chat.id ? (
+                  <input
+                    className="chat-sidebar-input"
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => handleRenameKeyDown(e, chat.id)}
+                    onBlur={() => handleSaveRename(chat.id)}
+                    autoFocus
+                  />
+                ) : (
+                  <button className="chat-item-main" onClick={() => handleSelectChat(chat.id)}>
+                    {chat.name}
+                  </button>
+                )}
+                <div className="chat-item-actions">
+                  <button className="chat-item-action" onClick={() => handleStartRename(chat)} title="Renomear chat">
+                    ✎
+                  </button>
+                  <button className="chat-item-action" onClick={() => handleDeleteChat(chat.id)} title="Excluir chat">
+                    🗑
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+        <button className="sidebar-close" onClick={() => setSidebarOpen(false)}>
+          Fechar
+        </button>
+      </aside>
+      {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
+      <div className="chat-content">
       {/* ── Header ── */}
       <header style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -154,10 +321,20 @@ export default function Chat() {
         borderBottom: '1px solid var(--bdr)', flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button className="sidebar-toggle" onClick={() => setSidebarOpen(true)} title="Abrir menu">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </button>
           <div style={{ lineHeight: 1.1 }}>
             <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: '.1em', color: 'var(--acc)' }}>AURORA</div>
             <div style={{ fontSize: 10, fontWeight: 400, color: 'var(--muted)', letterSpacing: '.05em', textTransform: 'uppercase', marginTop: 1 }}>
               Assistente Jurídica
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4, maxWidth: 240, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {activeChat?.name || 'Nenhuma conversa selecionada'}
             </div>
           </div>
           <span style={{
@@ -278,6 +455,7 @@ export default function Chat() {
         knowledgeBase={knowledgeBase}
       />
       <Toast toast={toast} />
+      </div>
     </div>
   );
 }

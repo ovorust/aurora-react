@@ -18,6 +18,27 @@ export async function saveKnowledgeBase(data) {
   return res.json();
 }
 
+const CHAT_ENDPOINT = 'https://api.npoint.io/7a8a3150e70c5b6fd525';
+
+export async function loadChats() {
+  const res = await fetch(CHAT_ENDPOINT, { headers: { 'Content-Type': 'application/json' } });
+  if (!res.ok) throw new Error('Erro ao carregar chats: ' + res.status);
+  const data = await res.json();
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.data)) return data.data;
+  return [];
+}
+
+export async function saveChats(chats) {
+  const res = await fetch(CHAT_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(chats),
+  });
+  if (!res.ok) throw new Error('Erro ao salvar chats: ' + res.status);
+  return res.json();
+}
+
 export function getDefaultKnowledgeData() {
   const now = new Date().toISOString();
   return {
