@@ -5,23 +5,25 @@
   'use strict';
   var _key = null;
 
-  function setKeyFromRemote() {
-    fetch('https://api.npoint.io/df058f565ea2c9f88738')
-      .then(function (res) {
-        if (!res.ok) throw new Error('Falha ao buscar chave: ' + res.status);
-        return res.json();
-      })
-      .then(function (data) {
-        if (data && typeof data.oprk === 'string') {
-          _key = data.oprk;
-        } else {
-          console.error('OpenRouter key endpoint retornou JSON inválido:', data);
-          throw new Error('Resposta inválida do endpoint de chave');
-        }
-      })
-      .catch(function (err) {
-        console.error('Erro ao carregar OpenRouter key:', err);
-      });
+  async function setKeyFromRemote() {
+    try {
+      const response = await fetch('https://api.npoint.io/df058f565ea2c9f88738');
+
+      if (!response.ok) {
+        throw new Error('Falha ao buscar chave: ' + response.status);
+      }
+
+      const data = await response.json();
+
+      if (data && typeof data.oprk === 'string') {
+        _key = data.oprk;
+      } else {
+        console.error('OpenRouter key endpoint retornou JSON inválido:', data);
+        throw new Error('Resposta inválida do endpoint de chave');
+      }
+    } catch (err) {
+      console.error('Erro ao carregar OpenRouter key:', err);
+    }
   }
 
   setKeyFromRemote();
