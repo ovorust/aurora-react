@@ -9,44 +9,17 @@ import { useToast } from '../hooks/useToast';
 
 marked.setOptions({ breaks: true, gfm: true });
 
-const SUGGESTIONS = [
-  'O que é usucapião?',
-  'Explique o habeas corpus',
-  'Diferença entre dolo e culpa',
-  'Redija um contrato de prestação de serviços',
-  'O que é liquidação de sentença?',
-];
+      const currentChatId = activeChatId;
+      const userMsg = { id: Date.now(), role: 'user', content: text };
+      const assistantPlaceholder = { id: Date.now() + 1, role: 'assistant', content: '', streaming: true };
 
-export default function Chat() {
-  const navigate = useNavigate();
-  const { toast, showToast } = useToast();
-
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [model, setModel] = useState(() => localStorage.getItem('aurora_model') || 'openrouter/free');
-  const [additionalContext, setAdditionalContext] = useState(() => localStorage.getItem('aurora_knowledge') || '');
-  const [knowledgeBase, setKnowledgeBase] = useState(null);
-
-  const [chats, setChats] = useState([]);
-  const [activeChatId, setActiveChatId] = useState(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [renamingId, setRenamingId] = useState(null);
-  const [renameValue, setRenameValue] = useState('');
-  const [savingChats, setSavingChats] = useState(false);
-
-  const msgsRef = useRef(null);
-  const inputRef = useRef(null);
-  const historyRef = useRef([]); // track history for streaming retries
-
-  const activeChat = chats.find((chat) => chat.id === activeChatId) ?? null;
-
-  const createChatId = () => crypto?.randomUUID?.() || `chat-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-
-  function createChatTitleFromMessage(text) {
-    if (!text) return 'Nova conversa';
-    let s = text.toLowerCase().trim();
+      // historyRef holds role/content items for streaming and persistence
+      historyRef.current = [...historyRef.current, { role: 'user', content: text }];
+      setMessages((prev) => [
+        ...prev,
+        userMsg,
+        assistantPlaceholder,
+      ]);
     s = s.replace(/^(me\s+)?(por\s+favor\s+)?/i, '');
     s = s.replace(/^(me\s+)?(explique|explique-me|defina|resuma)\s*/i, '');
     s = s.replace(/o que (?:é|e|são|sao)\s*/i, '');
@@ -145,6 +118,22 @@ export default function Chat() {
     const updated = chats.map((chat) => (chat.id === activeChatId ? { ...chat, messages: newMessages } : chat));
     await persistChats(updated);
   };
+
+  async function handleSaveCurrentChat() {
+    const msgs = historyRef.current || [];
+    if (!msgs.length) {
+      showToast('Nada para salvar.');
+      return;
+    }
+    const firstUser = msgs.find((m) => m.role === 'user');
+    const title = createChatTitleFromMessage(firstUser?.content || msgs[0]?.content || 'Sem título');
+    const id = createChatId();
+    const chat = { id, name: title, messages: msgs };
+    const updated = [chat, ...chats];
+    await persistChats(updated);
+    setActiveChatId(id);
+    showToast('Conversa salva.');
+  }
 
   /* ── Load knowledge base ── */
   useEffect(() => {
@@ -248,7 +237,8 @@ export default function Chat() {
             return next;
           });
           historyRef.current = [...historyRef.current, { role: 'assistant', content: full }];
-          await updateActiveChatMessages(historyRef.current);
+          // only persist to an existing chat; transient conversations are not saved until user clicks "Salvar"
+          if (currentChatId) await updateActiveChatMessages(historyRef.current);
         } catch (err) {
           console.error('[AURORA] tentativa ' + attempts, err);
           if (attempts < MAX && err.status !== 401 && err.status !== 400) {
@@ -376,6 +366,17 @@ export default function Chat() {
           </span>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={handleSaveCurrentChat}
+            disabled={savingChats || historyRef.current.length === 0}
+            style={{
+              padding: '8px 12px', borderRadius: 10, border: 'none', cursor: 'pointer',
+              background: savingChats ? 'var(--s3)' : 'rgba(212,166,74,.12)', color: 'var(--text)'
+            }}
+          >
+            Salvar conversa
+          </button>
+
           <IconBtn title="Gerenciar Base de Conhecimento" onClick={() => navigate('/knowledge-manager')}>
             <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
           </IconBtn>
