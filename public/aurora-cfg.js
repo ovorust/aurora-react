@@ -15,6 +15,7 @@
         if (data && typeof data.oprk === 'string') {
           _key = data.oprk;
         } else {
+          console.error('OpenRouter key endpoint retornou JSON inválido:', data);
           throw new Error('Resposta inválida do endpoint de chave');
         }
       })
