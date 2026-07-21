@@ -1,14 +1,26 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { marked } from 'marked';
-import { streamChat, loadKnowledgeBase, loadChats, saveChats } from '../utils/api';
+import { streamChat, loadKnowledgeBase } from '../utils/api';
+import {
+  loadInitialChats,
+  replaceAllChatsLocal,
+  scheduleCloudBackup,
+  setCloudStatusListener,
+} from '../utils/chatStorage';
 import { buildSystemPrompt, friendlyError } from '../utils/systemPrompt';
 import SettingsModal from '../components/SettingsModal';
 import Toast from '../components/Toast';
 import { useToast } from '../hooks/useToast';
 
 marked.setOptions({ breaks: true, gfm: true });
-marked.setOptions({ breaks: true, gfm: true });
+
+const SUGGESTIONS = [
+  'Explique o que é usucapião',
+  'Diferença entre dolo e culpa',
+  'O que diz o art. 5º da CF',
+  'Resuma o processo de habilitação de crédito',
+];
 
 export default function Chat() {
   const navigate = useNavigate();
@@ -27,10 +39,13 @@ export default function Chat() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [renamingId, setRenamingId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
-  const [savingChats, setSavingChats] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState('idle'); // 'idle' | 'syncing' | 'synced' | 'offline'
+  const [attachedFile, setAttachedFile] = useState(null); // { name, text, pageCount, truncated }
+  const [attaching, setAttaching] = useState(false);
 
   const msgsRef = useRef(null);
   const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
   const historyRef = useRef([]);
 
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? null;
@@ -54,9 +69,10 @@ export default function Chat() {
   }
 
   useEffect(() => {
-    loadChats()
-      .then((data) => {
-        const loaded = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+    setCloudStatusListener(setCloudStatus);
+
+    loadInitialChats()
+      .then(({ chats: loaded, source }) => {
         const normalized = loaded.map((chat) => ({
           id: chat.id || createChatId(),
           name: chat.name || 'Nova conversa',
@@ -66,9 +82,17 @@ export default function Chat() {
         if (normalized.length) {
           setActiveChatId(normalized[0].id);
         }
+        if (source === 'cloud') {
+          showToast('Conversas restauradas do backup na nuvem.');
+        }
       })
-      .catch(() => {});
-  }, []);
+      .catch((err) => {
+        console.error('[AURORA] Falha ao carregar conversas:', err);
+        showToast('Não foi possível carregar conversas salvas.');
+      });
+
+    return () => setCloudStatusListener(null);
+  }, []); // eslint-disable-line
 
   useEffect(() => {
     if (activeChat) {
@@ -82,15 +106,15 @@ export default function Chat() {
 
   const persistChats = async (updatedChats) => {
     setChats(updatedChats);
-    setSavingChats(true);
+    // Grava localmente primeiro (IndexedDB) — instantâneo e confiável, não depende de rede.
     try {
-      await saveChats(updatedChats);
+      await replaceAllChatsLocal(updatedChats);
     } catch (err) {
-      console.error('Falha ao salvar chats:', err);
-      showToast('Não foi possível salvar chats');
-    } finally {
-      setSavingChats(false);
+      console.error('Falha ao salvar chats localmente:', err);
+      showToast('Não foi possível salvar a conversa neste dispositivo.');
     }
+    // Backup na nuvem roda em segundo plano, debounced, sem travar a UI.
+    scheduleCloudBackup(updatedChats);
   };
 
   const handleNewChat = async () => {
@@ -176,15 +200,17 @@ export default function Chat() {
   const sendMessage = useCallback(
     async (text) => {
       text = text?.trim() || input.trim();
-      if (!text || busy) return;
+      const attachment = attachedFile;
+      if ((!text && !attachment) || busy) return;
 
       setInput('');
+      setAttachedFile(null);
       setBusy(true);
 
       let currentChatId = activeChatId;
       if (!currentChatId) {
         const id = createChatId();
-        const title = createChatTitleFromMessage(text);
+        const title = createChatTitleFromMessage(text || attachment?.name);
         const newChat = { id, name: title, messages: [] };
         const updatedChats = [newChat, ...chats];
         setChats(updatedChats);
@@ -193,10 +219,22 @@ export default function Chat() {
         await persistChats(updatedChats);
       }
 
-      const userMsg = { id: Date.now(), role: 'user', content: text };
+      // O que aparece na bolha do usuário (leve, sem o texto inteiro do PDF)
+      const displayText = text || `Analise o arquivo anexado: ${attachment.name}`;
+      const userMsg = {
+        id: Date.now(),
+        role: 'user',
+        content: displayText,
+        attachment: attachment ? { name: attachment.name, pageCount: attachment.pageCount, truncated: attachment.truncated } : null,
+      };
       const assistantPlaceholder = { id: Date.now() + 1, role: 'assistant', content: '', streaming: true };
 
-      historyRef.current = [...historyRef.current, { role: 'user', content: text }];
+      // O que vai pro modelo inclui o conteúdo extraído do PDF
+      const modelContent = attachment
+        ? `${displayText}\n\n--- Conteúdo do arquivo anexado (${attachment.name}${attachment.truncated ? ', truncado' : ''}) ---\n${attachment.text}`
+        : text;
+
+      historyRef.current = [...historyRef.current, { role: 'user', content: modelContent }];
       setMessages((prev) => [
         ...prev,
         userMsg,
@@ -257,7 +295,7 @@ export default function Chat() {
       setBusy(false);
       inputRef.current?.focus();
     },
-    [input, busy, model, knowledgeBase, additionalContext, activeChatId, chats]
+    [input, busy, model, knowledgeBase, additionalContext, activeChatId, chats, attachedFile]
   );
 
   function handleKeyDown(e) {
@@ -265,6 +303,33 @@ export default function Chat() {
       e.preventDefault();
       sendMessage();
     }
+  }
+
+  async function handleFileSelected(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // permite selecionar o mesmo arquivo de novo depois
+    if (!file) return;
+
+    setAttaching(true);
+    try {
+      const { extractPdfText } = await import('../utils/pdfReader');
+      const result = await extractPdfText(file);
+      setAttachedFile(result);
+      showToast(
+        result.truncated
+          ? `PDF anexado (${result.pageCount} pág.) — conteúdo truncado por ser muito longo.`
+          : `PDF anexado: ${result.pageCount} página(s).`
+      );
+    } catch (err) {
+      console.error('[AURORA] Falha ao ler PDF:', err);
+      showToast(err.message || 'Não foi possível ler o PDF.');
+    } finally {
+      setAttaching(false);
+    }
+  }
+
+  function handleRemoveAttachment() {
+    setAttachedFile(null);
   }
 
   function handleClear() {
@@ -359,6 +424,20 @@ export default function Chat() {
           }}>
             {badgeLabel}
           </span>
+          <span
+            title={
+              cloudStatus === 'syncing'
+                ? 'Sincronizando backup na nuvem…'
+                : cloudStatus === 'offline'
+                ? 'Backup na nuvem indisponível — salvo apenas neste dispositivo'
+                : cloudStatus === 'synced'
+                ? 'Backup na nuvem em dia'
+                : 'Conversas salvas neste dispositivo'
+            }
+            style={{ fontSize: 13, color: 'var(--muted)', opacity: cloudStatus === 'syncing' ? 0.6 : 1 }}
+          >
+            {cloudStatus === 'syncing' ? '☁️…' : cloudStatus === 'offline' ? '📱' : cloudStatus === 'synced' ? '☁️' : '📱'}
+          </span>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <IconBtn title="Gerenciar Base de Conhecimento" onClick={() => navigate('/knowledge-manager')}>
@@ -420,18 +499,65 @@ export default function Chat() {
         padding: '14px 20px 18px',
         borderTop: '1px solid var(--bdr)', background: 'var(--s1)', flexShrink: 0,
       }}>
+        {attachedFile && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8,
+            background: 'var(--acc-dim)', border: '1px solid rgba(212,166,74,.22)',
+            borderRadius: 'var(--r-lg)', padding: '7px 12px', fontSize: 12.5, color: 'var(--acc)',
+            maxWidth: 'fit-content',
+          }}>
+            <span>📎</span>
+            <span style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {attachedFile.name} ({attachedFile.pageCount} pág.{attachedFile.truncated ? ', truncado' : ''})
+            </span>
+            <button
+              onClick={handleRemoveAttachment}
+              title="Remover anexo"
+              style={{ background: 'none', border: 'none', color: 'var(--acc)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0 }}
+            >
+              ✕
+            </button>
+          </div>
+        )}
         <div style={{
           display: 'flex', gap: 10, alignItems: 'flex-end',
           background: 'var(--s2)', border: '1px solid var(--bdr)',
-          borderRadius: 'var(--r-pill)', padding: '10px 10px 10px 18px',
+          borderRadius: 'var(--r-pill)', padding: '10px 10px 10px 10px',
         }}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/pdf"
+            onChange={handleFileSelected}
+            style={{ display: 'none' }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy || attaching}
+            title="Anexar PDF"
+            style={{
+              width: 36, height: 36, minWidth: 36, borderRadius: 'var(--r-pill)',
+              background: 'transparent', border: '1px solid var(--bdr)',
+              cursor: busy || attaching ? 'not-allowed' : 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: attaching ? 'var(--acc)' : 'var(--muted)', flexShrink: 0,
+            }}
+          >
+            {attaching ? (
+              <span style={{ fontSize: 14 }}>⏳</span>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+            )}
+          </button>
           <textarea
             ref={inputRef}
             value={input}
             onInput={handleTextareaInput}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={busy ? 'Aguardando AURORA…' : 'Faça uma pergunta…'}
+            placeholder={busy ? 'Aguardando AURORA…' : attachedFile ? 'Pergunte algo sobre o PDF (opcional)…' : 'Faça uma pergunta…'}
             disabled={busy}
             rows={1}
             style={{
@@ -443,13 +569,13 @@ export default function Chat() {
           />
           <button
             onClick={() => sendMessage()}
-            disabled={busy || !input.trim()}
+            disabled={busy || (!input.trim() && !attachedFile)}
             style={{
               width: 36, height: 36, minWidth: 36, borderRadius: 'var(--r-pill)',
-              background: busy || !input.trim() ? 'var(--s3)' : 'var(--acc)',
-              border: 'none', cursor: busy || !input.trim() ? 'not-allowed' : 'pointer',
+              background: busy || (!input.trim() && !attachedFile) ? 'var(--s3)' : 'var(--acc)',
+              border: 'none', cursor: busy || (!input.trim() && !attachedFile) ? 'not-allowed' : 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: busy || !input.trim() ? 'var(--subtle)' : '#0c0b09',
+              color: busy || (!input.trim() && !attachedFile) ? 'var(--subtle)' : '#0c0b09',
               transition: 'all .15s', flexShrink: 0,
             }}
           >
@@ -533,7 +659,18 @@ function MessageRow({ msg }) {
           : { background: 'var(--s1)', border: '1px solid var(--bdr)', borderBottomLeftRadius: 'var(--r)' }),
       }}>
         {isUser ? (
-          msg.content
+          <>
+            {msg.attachment && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6,
+                fontSize: 12, opacity: 0.85, background: 'rgba(0,0,0,.12)',
+                borderRadius: 'var(--r)', padding: '4px 9px', width: 'fit-content',
+              }}>
+                📎 {msg.attachment.name} ({msg.attachment.pageCount} pág.{msg.attachment.truncated ? ', truncado' : ''})
+              </div>
+            )}
+            {msg.content}
+          </>
         ) : (
           <>
             <div
