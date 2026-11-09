@@ -26,7 +26,9 @@
     }
   }
 
-  setKeyFromRemote();
+  // Expose the loading promise so the chat can wait for the key before sending.
+  // Without this, a fast first message can be sent with `Bearer null`.
+  window.__cfgReady = setKeyFromRemote();
 
   Object.defineProperty(window, '__cfg', {
     get: function () { return { ak: _key }; },

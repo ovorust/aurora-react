@@ -63,10 +63,20 @@ export function getDefaultKnowledgeData() {
 
 /* ── OpenRouter Streaming ── */
 export async function* streamChat(messages, systemContent, model) {
+  // aurora-cfg.js retrieves the API key asynchronously during page load.
+  // Wait for that request so the first chat message doesn't use `Bearer null`.
+  if (window.__cfgReady) await window.__cfgReady;
+  const apiKey = window.__cfg?.ak;
+  if (!apiKey) {
+    const err = new Error('Não foi possível carregar a chave do OpenRouter. Verifique sua conexão e recarregue a página.');
+    err.status = 503;
+    throw err;
+  }
+
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer ' + window.__cfg.ak,
+      Authorization: 'Bearer ' + apiKey,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
